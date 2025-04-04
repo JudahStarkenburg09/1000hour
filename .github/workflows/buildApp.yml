@@ -25,7 +25,8 @@ jobs:
       - name: Install Buildozer dependencies
         run: |
           sudo apt update
-          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev automake
+          # Updated package list for Ubuntu 24.04
+          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake
           python -m pip install --upgrade pip
           pip install Cython==0.29.33
           pip install buildozer
@@ -38,14 +39,9 @@ jobs:
           # Build the APK
           buildozer android debug
 
-      # Using alternative release action
-      - name: Upload as release
-        uses: ncipollo/release-action@v1
+      # Using v2 of upload-artifact
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v2
         with:
-          artifacts: "bin/*.apk"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          draft: true
-          prerelease: true
-          tag: v0.1.${{ github.run_number }}
-          name: "Development Build ${{ github.run_number }}"
-          generateReleaseNotes: true
+          name: package
+          path: bin/*.apk
