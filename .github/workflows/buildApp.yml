@@ -38,42 +38,14 @@ jobs:
           # Build the APK
           buildozer android debug
 
-      # Option 1: Using a specific commit hash for upload-artifact
-      - name: Upload artifacts (specific commit)
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275fb9fe4c75 # v3.1.3
+      # Using alternative release action
+      - name: Upload as release
+        uses: ncipollo/release-action@v1
         with:
-          name: package
-          path: bin/*.apk
-
-      # Option 2: Using v2 (uncomment if Option 1 fails)
-      # - name: Upload artifacts (v2)
-      #   uses: actions/upload-artifact@v2
-      #   with:
-      #     name: package
-      #     path: bin/*.apk
-
-      # Option 3: Using alternative action (uncomment if Options 1 and 2 fail)
-      # - name: Upload as release
-      #   uses: ncipollo/release-action@v1
-      #   with:
-      #     artifacts: "bin/*.apk"
-      #     token: ${{ secrets.GITHUB_TOKEN }}
-      #     draft: true
-      #     prerelease: true
-      #     tag: v0.1.${{ github.run_number }}
-      #     name: "Development Build ${{ github.run_number }}"
-      #     generateReleaseNotes: true
-
-      # Option 4: Direct upload approach (uncomment if all above options fail)
-      # - name: Prepare artifacts
-      #   run: |
-      #     mkdir -p $GITHUB_WORKSPACE/artifacts
-      #     cp bin/*.apk $GITHUB_WORKSPACE/artifacts/
-      #     echo "artifact_path=$GITHUB_WORKSPACE/artifacts" >> $GITHUB_OUTPUT
-      #   id: upload
-      #
-      # - name: Archive artifacts (direct)
-      #   uses: actions/upload-artifact@v2
-      #   with:
-      #     name: package
-      #     path: ${{ steps.upload.outputs.artifact_path }}
+          artifacts: "bin/*.apk"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: true
+          prerelease: true
+          tag: v0.1.${{ github.run_number }}
+          name: "Development Build ${{ github.run_number }}"
+          generateReleaseNotes: true
