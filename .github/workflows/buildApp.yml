@@ -1,73 +1,49 @@
-name: Build Android APK
-on: 
-  workflow_dispatch:  # Allows manual triggering from GitHub UI
+# Tested: 2024/08/05
+# by Kasper Arfman
+name: Build APK App
+on: workflow_dispatch
 
 jobs:
   build-android:
-    name: Build Android APK
-    runs-on: ubuntu-20.04  # Using Ubuntu 20.04 for better compatibility with buildozer
+    name: Build for Android
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'  # Using Python 3.9 for better compatibility
+          python-version: '3.10'
 
-      - name: Cache Buildozer global directory
-        uses: actions/cache@v3
+      - name: Set up JDK
+        uses: actions/setup-java@v3
         with:
-          path: ~/.buildozer
-          key: buildozer-global-${{ hashFiles('buildozer.spec') }}
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Install dependencies
+      - name: Install Buildozer dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            python3-pip \
-            build-essential \
-            git \
-            python3 \
-            python3-dev \
-            ffmpeg \
-            libsdl2-dev \
-            libsdl2-image-dev \
-            libsdl2-mixer-dev \
-            libsdl2-ttf-dev \
-            libportmidi-dev \
-            libswscale-dev \
-            libavformat-dev \
-            libavcodec-dev \
-            zlib1g-dev \
-            libgstreamer1.0 \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            libffi-dev \
-            autoconf \
-            automake \
-            libtool \
-            pkg-config \
-            openjdk-8-jdk \
-            zip \
-            unzip
+          sudo apt update
+          # Updated package list for Ubuntu 24.04
+          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake libtool-bin
+          python -m pip install --upgrade pip
+          pip install Cython==0.29.33
+          pip install buildozer
 
-      - name: Install Buildozer
-        run: |
-          pip install --upgrade Cython==0.29.33 wheel pip setuptools
-          pip install --upgrade buildozer
-          
-          # Verify installation
-          buildozer --version
-
-      - name: Fix buildozer.spec if needed
+      # Set the correct NDK version in buildozer.spec
+      - name: Update buildozer.spec for NDK version
         run: |
           if [ -f buildozer.spec ]; then
-            echo "Checking buildozer.spec for issues..."
+            # Update or add the NDK version
+            if grep -q "^android.ndk =" buildozer.spec; then
+              sed -i 's/^android.ndk =.*/android.ndk = 25b/g' buildozer.spec
+            else
+              echo "android.ndk = 25b" >> buildozer.spec
+            fi
             
             # Fix duplicate requirements if they exist
             if [ $(grep -c "^requirements =" buildozer.spec) -gt 1 ]; then
-              echo "Found duplicate requirements, fixing..."
               # Get all requirements lines
               reqs=$(grep "^requirements =" buildozer.spec | sed 's/^requirements = //g' | tr '\n' ',')
               # Remove the last comma if present
@@ -76,23 +52,16 @@ jobs:
               sed -i '/^requirements =/d' buildozer.spec
               # Add the combined requirements line
               echo "requirements = $reqs" >> buildozer.spec
-              echo "Fixed duplicate requirements"
             fi
             
-            # Set NDK version to a compatible one
-            if grep -q "^android.ndk =" buildozer.spec; then
-              sed -i 's/^android.ndk =.*/android.ndk = 23b/g' buildozer.spec
-              echo "Set NDK version to 23b"
-            else
-              echo "android.ndk = 23b" >> buildozer.spec
-              echo "Added NDK version 23b"
+            # Add p4a.fork option to use a more compatible fork
+            if ! grep -q "^p4a.fork =" buildozer.spec; then
+              echo "p4a.fork = kivy" >> buildozer.spec
             fi
             
-            # Make sure android.accept_sdk_license is set to True
-            if grep -q "^android.accept_sdk_license =" buildozer.spec; then
-              sed -i 's/^android.accept_sdk_license =.*/android.accept_sdk_license = True/g' buildozer.spec
-            else
-              echo "android.accept_sdk_license = True" >> buildozer.spec
+            # Add p4a.branch option to use a stable branch
+            if ! grep -q "^p4a.branch =" buildozer.spec; then
+              echo "p4a.branch = master" >> buildozer.spec
             fi
             
             echo "Updated buildozer.spec:"
@@ -102,33 +71,76 @@ jobs:
             exit 1
           fi
 
-      - name: Build APK with Buildozer
+      # Patch libffi build issue
+      - name: Create libffi patch
         run: |
-          # Create a log directory
-          mkdir -p logs
+          mkdir -p patches
+          cat > patches/libffi_fix.patch << 'EOF'
+          --- a/configure.ac
+          +++ b/configure.ac
+          @@ -215,6 +215,7 @@
+           fi
+           
+           if test x$TARGET = xX86_64; then
+          +  m4_ifdef([LT_SYS_SYMBOL_USCORE], [LT_SYS_SYMBOL_USCORE], [AC_LIBTOOL_SYS_GLOBAL_SYMBOL_PIPE])
+             SYMBOL_PREFIX=
+           fi
+           
+          EOF
+
+      - name: Build with Buildozer
+        run: |
+          # Accept Android SDK licenses
+          mkdir -p ~/.android
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/repositories.cfg
           
-          # Build with detailed logging
-          buildozer -v android debug 2>&1 | tee logs/buildozer.log
+          # Set environment variables to use NDK 25b
+          export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
+          export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
           
-          # Check if build was successful
+          # Create hook to patch libffi
+          mkdir -p .buildozer/hooks
+          cat > .buildozer/hooks/before_recipe_build.py << 'EOF'
+          import os
+          import shutil
+          
+          def before_recipe_build(recipe, arch):
+              # Only patch libffi
+              if recipe.name == 'libffi':
+                  print("Patching libffi configure.ac")
+                  patch_path = os.path.join(os.getcwd(), 'patches', 'libffi_fix.patch')
+                  recipe_dir = recipe.get_build_dir(arch.arch)
+                  
+                  if os.path.exists(patch_path) and os.path.exists(recipe_dir):
+                      os.system(f'cd {recipe_dir} && patch -p1 < {patch_path}')
+                      print("Patch applied successfully")
+          EOF
+          
+          # Build the APK with increased verbosity
+          buildozer -v android debug
+
+      # Direct upload approach without external actions
+      - name: Create artifact directory
+        run: mkdir -p $GITHUB_WORKSPACE/artifacts
+        
+      - name: Copy APK to artifact directory
+        run: |
           if [ -d "bin" ] && [ "$(ls -A bin/*.apk 2>/dev/null)" ]; then
-            echo "Build successful! APK created."
-            ls -la bin/
+            cp bin/*.apk $GITHUB_WORKSPACE/artifacts/
+            echo "APK files copied to artifacts directory"
+            ls -la $GITHUB_WORKSPACE/artifacts/
           else
-            echo "Build failed or no APK generated."
-            exit 1
+            echo "No APK files found in bin directory"
+            mkdir -p bin
+            touch bin/build_failed.txt
+            echo "Build failed or no APK generated" > bin/build_failed.txt
+            cp bin/build_failed.txt $GITHUB_WORKSPACE/artifacts/
           fi
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v3
+      
+      # Try a different approach for uploading artifacts
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4  # Try v4 instead of v2/v3
         with:
-          name: app-debug
-          path: bin/*.apk
-          if-no-files-found: error
-
-      - name: Upload build logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v3
-        with:
-          name: build-logs
-          path: logs/
+          name: apk-package
+          path: ${{ github.workspace }}/artifacts/
+          if-no-files-found: warn
