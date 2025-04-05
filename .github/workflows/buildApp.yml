@@ -31,11 +31,46 @@ jobs:
           pip install Cython==0.29.33
           pip install buildozer
 
+      # Set the correct NDK version in buildozer.spec
+      - name: Update buildozer.spec for NDK version
+        run: |
+          if [ -f buildozer.spec ]; then
+            # Update or add the NDK version
+            if grep -q "^android.ndk =" buildozer.spec; then
+              sed -i 's/^android.ndk =.*/android.ndk = 25b/g' buildozer.spec
+            else
+              echo "android.ndk = 25b" >> buildozer.spec
+            fi
+            
+            # Fix duplicate requirements if they exist
+            if [ $(grep -c "^requirements =" buildozer.spec) -gt 1 ]; then
+              # Get all requirements lines
+              reqs=$(grep "^requirements =" buildozer.spec | sed 's/^requirements = //g' | tr '\n' ',')
+              # Remove the last comma if present
+              reqs=${reqs%,}
+              # Remove all requirements lines
+              sed -i '/^requirements =/d' buildozer.spec
+              # Add the combined requirements line
+              echo "requirements = $reqs" >> buildozer.spec
+            fi
+            
+            echo "Updated buildozer.spec:"
+            cat buildozer.spec
+          else
+            echo "buildozer.spec not found!"
+            exit 1
+          fi
+
       - name: Build with Buildozer
         run: |
           # Accept Android SDK licenses
           mkdir -p ~/.android
           echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/repositories.cfg
+          
+          # Set environment variables to use NDK 25b
+          export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
+          export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
+          
           # Build the APK
           buildozer android debug
 
@@ -57,15 +92,9 @@ jobs:
             cp bin/build_failed.txt $GITHUB_WORKSPACE/artifacts/
           fi
       
-      # Use GitHub's built-in artifact storage
-      - name: Upload artifact (GitHub API)
-        run: |
-          APK_FILES=$(find $GITHUB_WORKSPACE/artifacts -type f | tr '\n' ',' | sed 's/,$//')
-          if [ -n "$APK_FILES" ]; then
-            echo "Uploading files: $APK_FILES"
-            curl -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              -F "name=apk-package" \
-              -F "files=@$APK_FILES" \
-              "https://api.github.com/repos/$
+      # Use GitHub's built-in artifact storage via direct upload
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4  # Try v4 instead of v2/v3
+        with:
+          name: apk-package
+          path: ${{ github.workspace }}/artifacts/
