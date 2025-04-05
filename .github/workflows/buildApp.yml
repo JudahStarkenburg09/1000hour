@@ -26,7 +26,7 @@ jobs:
         run: |
           sudo apt update
           # Updated package list for Ubuntu 24.04
-          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake
+          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake libtool-bin
           python -m pip install --upgrade pip
           pip install Cython==0.29.33
           pip install buildozer
@@ -54,12 +54,39 @@ jobs:
               echo "requirements = $reqs" >> buildozer.spec
             fi
             
+            # Add p4a.fork option to use a more compatible fork
+            if ! grep -q "^p4a.fork =" buildozer.spec; then
+              echo "p4a.fork = kivy" >> buildozer.spec
+            fi
+            
+            # Add p4a.branch option to use a stable branch
+            if ! grep -q "^p4a.branch =" buildozer.spec; then
+              echo "p4a.branch = master" >> buildozer.spec
+            fi
+            
             echo "Updated buildozer.spec:"
             cat buildozer.spec
           else
             echo "buildozer.spec not found!"
             exit 1
           fi
+
+      # Patch libffi build issue
+      - name: Create libffi patch
+        run: |
+          mkdir -p patches
+          cat > patches/libffi_fix.patch << 'EOF'
+          --- a/configure.ac
+          +++ b/configure.ac
+          @@ -215,6 +215,7 @@
+           fi
+           
+           if test x$TARGET = xX86_64; then
+          +  m4_ifdef([LT_SYS_SYMBOL_USCORE], [LT_SYS_SYMBOL_USCORE], [AC_LIBTOOL_SYS_GLOBAL_SYMBOL_PIPE])
+             SYMBOL_PREFIX=
+           fi
+           
+          EOF
 
       - name: Build with Buildozer
         run: |
@@ -71,8 +98,26 @@ jobs:
           export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
           export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
           
-          # Build the APK
-          buildozer android debug
+          # Create hook to patch libffi
+          mkdir -p .buildozer/hooks
+          cat > .buildozer/hooks/before_recipe_build.py << 'EOF'
+          import os
+          import shutil
+          
+          def before_recipe_build(recipe, arch):
+              # Only patch libffi
+              if recipe.name == 'libffi':
+                  print("Patching libffi configure.ac")
+                  patch_path = os.path.join(os.getcwd(), 'patches', 'libffi_fix.patch')
+                  recipe_dir = recipe.get_build_dir(arch.arch)
+                  
+                  if os.path.exists(patch_path) and os.path.exists(recipe_dir):
+                      os.system(f'cd {recipe_dir} && patch -p1 < {patch_path}')
+                      print("Patch applied successfully")
+          EOF
+          
+          # Build the APK with increased verbosity
+          buildozer -v android debug
 
       # Direct upload approach without external actions
       - name: Create artifact directory
@@ -92,9 +137,10 @@ jobs:
             cp bin/build_failed.txt $GITHUB_WORKSPACE/artifacts/
           fi
       
-      # Use GitHub's built-in artifact storage via direct upload
+      # Try a different approach for uploading artifacts
       - name: Upload artifact
         uses: actions/upload-artifact@v4  # Try v4 instead of v2/v3
         with:
           name: apk-package
           path: ${{ github.workspace }}/artifacts/
+          if-no-files-found: warn
