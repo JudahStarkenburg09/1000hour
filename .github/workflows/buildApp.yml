@@ -1,4 +1,4 @@
-name: Build APK App
+name: Build APK App - Docker Method
 on: workflow_dispatch
 
 jobs:
@@ -9,28 +9,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
 
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Install Buildozer dependencies
-        run: |
-          sudo apt update
-          # Updated package list for Ubuntu 24.04
-          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake libtool-bin
-          python -m pip install --upgrade pip
-          pip install Cython==0.29.33
-          pip install buildozer
-
-      # Set the correct NDK version in buildozer.spec
-      - name: Update buildozer.spec for NDK version
+      - name: Update buildozer.spec
         run: |
           if [ -f buildozer.spec ]; then
             # Update or add the NDK version
@@ -42,24 +24,10 @@ jobs:
             
             # Fix duplicate requirements if they exist
             if [ $(grep -c "^requirements =" buildozer.spec) -gt 1 ]; then
-              # Get all requirements lines
               reqs=$(grep "^requirements =" buildozer.spec | sed 's/^requirements = //g' | tr '\n' ',')
-              # Remove the last comma if present
               reqs=${reqs%,}
-              # Remove all requirements lines
               sed -i '/^requirements =/d' buildozer.spec
-              # Add the combined requirements line
               echo "requirements = $reqs" >> buildozer.spec
-            fi
-            
-            # Add p4a.fork option to use a more compatible fork
-            if ! grep -q "^p4a.fork =" buildozer.spec; then
-              echo "p4a.fork = kivy" >> buildozer.spec
-            fi
-            
-            # Add p4a.branch option to use a stable branch
-            if ! grep -q "^p4a.branch =" buildozer.spec; then
-              echo "p4a.branch = master" >> buildozer.spec
             fi
             
             echo "Updated buildozer.spec:"
@@ -69,89 +37,31 @@ jobs:
             exit 1
           fi
 
-      # Create an improved libffi patch that properly defines LT_SYS_SYMBOL_USCORE
-      - name: Create libffi patch
+      - name: Build APK with Docker
         run: |
-          mkdir -p patches
-          cat > patches/libffi_fix.patch << 'EOF'
-          --- a/configure.ac
-          +++ b/configure.ac
-          @@ -212,6 +212,14 @@
-           
-           if test x$TARGET = xX86_64; then
-          +  # Define LT_SYS_SYMBOL_USCORE macro if it's not already defined
-          +  m4_ifndef([LT_SYS_SYMBOL_USCORE],
-          +  [AC_DEFUN([LT_SYS_SYMBOL_USCORE],
-          +  [AC_CACHE_CHECK([for _ prefix in compiled symbols],
-          +    [lt_cv_sys_symbol_underscore],
-          +    [lt_cv_sys_symbol_underscore=no
-          +    cat > conftest.$ac_ext <<_LT_EOF
-          +    void nm_test_func(){}
-          +    _LT_EOF])])])
-          +  LT_SYS_SYMBOL_USCORE
-             SYMBOL_PREFIX=
-           fi
-           
-          EOF
-
-      - name: Build with Buildozer
-        run: |
-          # Accept Android SDK licenses
-          mkdir -p ~/.android
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/repositories.cfg
+          # Create a volume for buildozer cache to speed up future builds
+          docker volume create buildozer-cache
           
-          # Set environment variables to use NDK 25b
-          export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
-          export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
+          # Run the build in a Kivy buildozer container
+          docker run --rm \
+            -v "$PWD":/home/user/hostcwd \
+            -v buildozer-cache:/home/user/.buildozer \
+            -w /home/user/hostcwd \
+            --env BUILDOZER_VERBOSE=1 \
+            kivy/buildozer:latest \
+            buildozer android debug
           
-          # Create hook to patch libffi
-          mkdir -p .buildozer/hooks
-          cat > .buildozer/hooks/before_recipe_build.py << 'EOF'
-          import os
-          import shutil
-          
-          def before_recipe_build(recipe, arch):
-              # Only patch libffi
-              if recipe.name == 'libffi':
-                  print("Patching libffi configure.ac")
-                  patch_path = os.path.join(os.getcwd(), 'patches', 'libffi_fix.patch')
-                  recipe_dir = recipe.get_build_dir(arch.arch)
-                  
-                  if os.path.exists(patch_path) and os.path.exists(recipe_dir):
-                      os.system(f'cd {recipe_dir} && patch -p1 < {patch_path}')
-                      print("Patch applied successfully")
-                      
-                      # Run autoreconf after patching to regenerate configure
-                      os.system(f'cd {recipe_dir} && autoreconf -fi')
-                      print("Ran autoreconf after patching")
-          EOF
-          
-          # Build the APK with increased verbosity
-          buildozer -v android debug
-
-      # Direct upload approach without external actions
-      - name: Create artifact directory
-        run: mkdir -p $GITHUB_WORKSPACE/artifacts
-        
-      - name: Copy APK to artifact directory
-        run: |
+          # Check if the build was successful
           if [ -d "bin" ] && [ "$(ls -A bin/*.apk 2>/dev/null)" ]; then
-            cp bin/*.apk $GITHUB_WORKSPACE/artifacts/
-            echo "APK files copied to artifacts directory"
-            ls -la $GITHUB_WORKSPACE/artifacts/
+            echo "Build successful! APK created."
           else
-            echo "No APK files found in bin directory"
-            mkdir -p bin
-            touch bin/build_failed.txt
-            echo "Build failed or no APK generated" > bin/build_failed.txt
-            cp bin/build_failed.txt $GITHUB_WORKSPACE/artifacts/
+            echo "Build failed or no APK generated."
+            exit 1
           fi
-      
-      # Try a different approach for uploading artifacts
-      - name: Upload artifact
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: apk-package
-          path: ${{ github.workspace }}/artifacts/
+          path: bin/*.apk
           if-no-files-found: warn
-
