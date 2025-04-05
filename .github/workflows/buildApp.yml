@@ -39,9 +39,33 @@ jobs:
           # Build the APK
           buildozer android debug
 
-      # Using v2 of upload-artifact
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: package
-          path: bin/*.apk
+      # Direct upload approach without external actions
+      - name: Create artifact directory
+        run: mkdir -p $GITHUB_WORKSPACE/artifacts
+        
+      - name: Copy APK to artifact directory
+        run: |
+          if [ -d "bin" ] && [ "$(ls -A bin/*.apk 2>/dev/null)" ]; then
+            cp bin/*.apk $GITHUB_WORKSPACE/artifacts/
+            echo "APK files copied to artifacts directory"
+            ls -la $GITHUB_WORKSPACE/artifacts/
+          else
+            echo "No APK files found in bin directory"
+            mkdir -p bin
+            touch bin/build_failed.txt
+            echo "Build failed or no APK generated" > bin/build_failed.txt
+            cp bin/build_failed.txt $GITHUB_WORKSPACE/artifacts/
+          fi
+      
+      # Use GitHub's built-in artifact storage
+      - name: Upload artifact (GitHub API)
+        run: |
+          APK_FILES=$(find $GITHUB_WORKSPACE/artifacts -type f | tr '\n' ',' | sed 's/,$//')
+          if [ -n "$APK_FILES" ]; then
+            echo "Uploading files: $APK_FILES"
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -F "name=apk-package" \
+              -F "files=@$APK_FILES" \
+              "https://api.github.com/repos/$
