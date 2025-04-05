@@ -9,7 +9,7 @@ source.include_exts = py,png,jpg,kv,atlas
 
 # Application version
 version = 1.0
-requirements = python3,kivy,plyer
+requirements = python3,kivy,plyer,pyjnius
 
 # Android specific
 android.permissions = WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
@@ -39,10 +39,6 @@ android.logcat_filters = *:S python:D
 
 # Automatically add files from .gitignore
 #source.exclude_patterns = license,images/*/*.jpg
-
-# (list) Application requirements
-# comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy,plyer,pyjnius
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
