@@ -1,5 +1,3 @@
-# Tested: 2024/08/05
-# by Kasper Arfman
 name: Build APK App
 on: workflow_dispatch
 
@@ -71,18 +69,26 @@ jobs:
             exit 1
           fi
 
-      # Patch libffi build issue
+      # Create an improved libffi patch that properly defines LT_SYS_SYMBOL_USCORE
       - name: Create libffi patch
         run: |
           mkdir -p patches
           cat > patches/libffi_fix.patch << 'EOF'
           --- a/configure.ac
           +++ b/configure.ac
-          @@ -215,6 +215,7 @@
-           fi
+          @@ -212,6 +212,14 @@
            
            if test x$TARGET = xX86_64; then
-          +  m4_ifdef([LT_SYS_SYMBOL_USCORE], [LT_SYS_SYMBOL_USCORE], [AC_LIBTOOL_SYS_GLOBAL_SYMBOL_PIPE])
+          +  # Define LT_SYS_SYMBOL_USCORE macro if it's not already defined
+          +  m4_ifndef([LT_SYS_SYMBOL_USCORE],
+          +  [AC_DEFUN([LT_SYS_SYMBOL_USCORE],
+          +  [AC_CACHE_CHECK([for _ prefix in compiled symbols],
+          +    [lt_cv_sys_symbol_underscore],
+          +    [lt_cv_sys_symbol_underscore=no
+          +    cat > conftest.$ac_ext <<_LT_EOF
+          +    void nm_test_func(){}
+          +    _LT_EOF])])])
+          +  LT_SYS_SYMBOL_USCORE
              SYMBOL_PREFIX=
            fi
            
@@ -114,6 +120,10 @@ jobs:
                   if os.path.exists(patch_path) and os.path.exists(recipe_dir):
                       os.system(f'cd {recipe_dir} && patch -p1 < {patch_path}')
                       print("Patch applied successfully")
+                      
+                      # Run autoreconf after patching to regenerate configure
+                      os.system(f'cd {recipe_dir} && autoreconf -fi')
+                      print("Ran autoreconf after patching")
           EOF
           
           # Build the APK with increased verbosity
@@ -139,8 +149,9 @@ jobs:
       
       # Try a different approach for uploading artifacts
       - name: Upload artifact
-        uses: actions/upload-artifact@v4  # Try v4 instead of v2/v3
+        uses: actions/upload-artifact@v4
         with:
           name: apk-package
           path: ${{ github.workspace }}/artifacts/
           if-no-files-found: warn
+
