@@ -1,204 +1,32 @@
-name: Build APK App - Reliable Method
-on: workflow_dispatch
+name: Build APK
+
+on:
+  push:
+    branches: [main]
 
 jobs:
-  build-android:
-    name: Build for Android
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential ccache git zip unzip openjdk-17-jdk python3-pip python3-setuptools python3-wheel
+        pip install --upgrade pip
+        pip install --user buildozer
 
-      - name: Install Buildozer dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y git zip unzip autoconf automake libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev \
-            libssl-dev
-          python -m pip install --upgrade pip
-          pip install Cython==0.29.33
-          pip install buildozer==1.5.0
+    - name: Add local bin to PATH
+      run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Clean up previous NDK if exists
-        run: |
-          rm -rf ~/.buildozer/android/platform/android-ndk-r25b
-
-
-      - name: Create NDK symlink
-        run: |
-          # Create directory structure
-          mkdir -p ~/.buildozer/android/platform
-          
-          # Create symlink to the pre-installed NDK
-          ln -sf /usr/local/lib/android/sdk/ndk/25.2.9519653 ~/.buildozer/android/platform/android-ndk-r25b
-          
-          # Verify the symlink
-          ls -la ~/.buildozer/android/platform/android-ndk-r25b
-          
-          # Create .android directory and repositories.cfg
-          mkdir -p ~/.android
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/repositories.cfg
-
-      - name: Update buildozer.spec
-        run: |
-          if [ -f buildozer.spec ]; then
-            # Update NDK version
-            sed -i 's/^android.ndk =.*/android.ndk = 25b/g' buildozer.spec
-            
-            # Set NDK API to match minapi
-            sed -i 's/^android.ndk_api =.*/android.ndk_api = 21/g' buildozer.spec
-            
-            # Set p4a branch to develop
-            sed -i 's/^p4a.branch =.*/p4a.branch = develop/g' buildozer.spec
-            
-            # Add skip_update to avoid downloading SDK again
-            if ! grep -q "^android.skip_update =" buildozer.spec; then
-              echo "android.skip_update = True" >> buildozer.spec
-            else
-              sed -i 's/^android.skip_update =.*/android.skip_update = True/g' buildozer.spec
-            fi
-            
-            # Add SDK path
-            if ! grep -q "^android.sdk_path =" buildozer.spec; then
-              echo "android.sdk_path = /usr/local/lib/android/sdk" >> buildozer.spec
-            else
-              sed -i 's|^android.sdk_path =.*|android.sdk_path = /usr/local/lib/android/sdk|g' buildozer.spec
-            fi
-            
-            # Add NDK path
-            if ! grep -q "^android.ndk_path =" buildozer.spec; then
-              echo "android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653" >> buildozer.spec
-            else
-              sed -i 's|^android.ndk_path =.*|android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653|g' buildozer.spec
-            fi
-            
-            echo "Updated buildozer.spec:"
-            cat buildozer.spec
-          else
-            echo "buildozer.spec not found!"
-            exit 1
-          fi
-
-      - name: Create libffi patch
-        run: |
-          mkdir -p patches
-          cat > patches/libffi_fix.patch << 'EOF'
-          diff -ur a/configure.ac b/configure.ac
-          --- a/configure.ac
-          +++ b/configure.ac
-          @@ -1,5 +1,15 @@
-           dnl Process this with autoconf to create configure
-           
-          +dnl Define LT_SYS_SYMBOL_USCORE macro if it's not already defined
-          +m4_ifndef([LT_SYS_SYMBOL_USCORE],
-          +[AC_DEFUN([LT_SYS_SYMBOL_USCORE],
-          +[AC_CACHE_CHECK([for _ prefix in compiled symbols],
-          +  [lt_cv_sys_symbol_underscore],
-          +  [lt_cv_sys_symbol_underscore=no
-          +  cat > conftest.$ac_ext <<_LT_EOF
-          +  void nm_test_func(){}
-          +  _LT_EOF
-          +  ])])])
-          +
-           AC_INIT([libffi], [3.3-rc0], [http://github.com/libffi/libffi/issues])
-           AC_CONFIG_HEADERS([fficonfig.h])
-           
-          @@ -214,6 +224,7 @@
-           
-           if test x$TARGET = xX86_64; then
-          +  LT_SYS_SYMBOL_USCORE
-             SYMBOL_PREFIX=
-           fi
-           
-          EOF
-
-      - name: Create libffi fix script
-        run: |
-          mkdir -p .buildozer/hooks
-          cat > .buildozer/hooks/before_recipe_build.py << 'EOF'
-          import os
-          import subprocess
-          import shutil
-          
-          def before_recipe_build(recipe, arch):
-              # Only patch libffi
-              if recipe.name == 'libffi':
-                  print("Patching libffi configure.ac")
-                  patch_path = os.path.join(os.getcwd(), 'patches', 'libffi_fix.patch')
-                  recipe_dir = recipe.get_build_dir(arch.arch)
-                  
-                  if os.path.exists(patch_path) and os.path.exists(recipe_dir):
-                      # Apply the patch
-                      result = subprocess.run(
-                          f'cd {recipe_dir} && patch -p1 < {patch_path}',
-                          shell=True,
-                          capture_output=True,
-                          text=True
-                      )
-                      print("Patch output:", result.stdout)
-                      if result.stderr:
-                          print("Patch errors:", result.stderr)
-                      
-                      # Create m4 directory if it doesn't exist
-                      m4_dir = os.path.join(recipe_dir, 'm4')
-                      os.makedirs(m4_dir, exist_ok=True)
-                      
-                      # Create pattern_allow.m4 file
-                      with open(os.path.join(m4_dir, 'pattern_allow.m4'), 'w') as f:
-                          f.write('m4_pattern_allow([LT_SYS_SYMBOL_USCORE])\n')
-                      
-                      # Run libtoolize first
-                      subprocess.run(
-                          f'cd {recipe_dir} && libtoolize --force --copy',
-                          shell=True,
-                          check=True
-                      )
-                      
-                      # Run aclocal with include path
-                      subprocess.run(
-                          f'cd {recipe_dir} && aclocal -I m4',
-                          shell=True,
-                          check=True
-                      )
-                      
-                      # Run autoconf
-                      subprocess.run(
-                          f'cd {recipe_dir} && autoconf',
-                          shell=True,
-                          check=True
-                      )
-                      
-                      print("Successfully patched and reconfigured libffi")
-          EOF
-
-      - name: Install additional tools for libffi
-        run: |
-          sudo apt-get install -y autoconf automake libtool
-
-      - name: Build with Buildozer
-        run: |
-          # Set environment variables
-          export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
-          export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
-          export ANDROIDSDK="/usr/local/lib/android/sdk"
-          
-          # Run buildozer with verbose output and debug level 2
-          buildozer -v android debug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-package
-          path: bin/*.apk
-          if-no-files-found: warn
+    - name: Build APK
+      run: |
+        buildozer android debug
