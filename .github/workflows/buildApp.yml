@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -29,14 +29,12 @@ jobs:
             python3-pip \
             python3-setuptools \
             python3-wheel \
-            libncurses5 \
             libstdc++6 \
             libffi-dev \
             libssl-dev \
             libsqlite3-dev \
             zlib1g-dev \
-            libncursesw5 \
-            libreadline6-dev \
+            libreadline-dev \
             libgdbm-dev \
             libc6-dev \
             libbz2-dev \
@@ -47,7 +45,6 @@ jobs:
             cmake \
             pkg-config \
             libtool \
-            libltdl-dev \
             libjpeg-dev \
             libfreetype6-dev \
             libpng-dev \
@@ -55,13 +52,13 @@ jobs:
             libavformat-dev \
             libswscale-dev \
             libtiff-dev \
-            libx11-6 \
             libx11-dev \
-            x11proto-core-dev \
             libxext-dev \
             libsm-dev \
             libxrender-dev
 
+      - name: Install Python dependencies
+        run: |
           pip install --upgrade pip
           pip install cython buildozer
 
