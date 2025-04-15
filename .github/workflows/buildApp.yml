@@ -92,7 +92,7 @@ jobs:
           android.sdk = 33
           android.ndk = 25b
           android.ndk_path = /home/runner/.buildozer/android/platform/android-ndk-r25b
-          android.skip_update = True
+          android.skip_update = False
           android.accept_sdk_license = True
           android.arch = arm64-v8a
           p4a.bootstrap = sdl2
@@ -122,6 +122,32 @@ jobs:
           ls -la
           echo "NDK installation completed."
 
+      - name: Download and setup Android SDK
+        run: |
+          mkdir -p /home/runner/.buildozer/android/platform/android-sdk
+          cd /home/runner/.buildozer/android/platform/android-sdk
+          
+          # Download Android SDK command-line tools
+          curl -L -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip -q cmdline-tools.zip
+          
+          # Create proper directory structure for SDK tools
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/* cmdline-tools/latest/ 2>/dev/null || true
+          
+          # Accept licenses
+          yes | cmdline-tools/latest/bin/sdkmanager --licenses
+          
+          # Install required SDK components
+          cmdline-tools/latest/bin/sdkmanager --install "platform-tools" "build-tools;33.0.2" "platforms;android-33"
+          
+          # Verify installation
+          ls -la
+          ls -la build-tools
+          ls -la build-tools/33.0.2
+          
+          echo "Android SDK setup completed."
+
       - name: Create minimal app if needed
         run: |
           if [ ! -f main.py ]; then
@@ -140,6 +166,9 @@ jobs:
         run: |
           export BUILDOZER_TIMEOUT=600
           export P4A_DEBUG_OUTPUT=1
+          export PATH=$PATH:/home/runner/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin
+          export PATH=$PATH:/home/runner/.buildozer/android/platform/android-sdk/build-tools/33.0.2
+          export PATH=$PATH:/home/runner/.buildozer/android/platform/android-sdk/platform-tools
           buildozer -v android debug
           
       - name: List built APKs
