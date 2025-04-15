@@ -1,4 +1,4 @@
-name: Build APK App - Patch Method
+name: Build APK App - Reliable Method
 on: workflow_dispatch
 
 jobs:
@@ -23,37 +23,59 @@ jobs:
       - name: Install Buildozer dependencies
         run: |
           sudo apt update
-          # Using libtinfo6 instead of libtinfo5 for Ubuntu 24.04
-          sudo apt install -y git zip unzip autoconf automake libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev
+          sudo apt install -y git zip unzip autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev \
+            libssl-dev
           python -m pip install --upgrade pip
           pip install Cython==0.29.33
-          pip install buildozer
+          pip install buildozer==1.5.0
+
+      - name: Create NDK symlink
+        run: |
+          # Create directory structure
+          mkdir -p ~/.buildozer/android/platform
+          
+          # Create symlink to the pre-installed NDK
+          ln -sf /usr/local/lib/android/sdk/ndk/25.2.9519653 ~/.buildozer/android/platform/android-ndk-r25b
+          
+          # Verify the symlink
+          ls -la ~/.buildozer/android/platform/android-ndk-r25b
+          
+          # Create .android directory and repositories.cfg
+          mkdir -p ~/.android
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/repositories.cfg
 
       - name: Update buildozer.spec
         run: |
           if [ -f buildozer.spec ]; then
-            # Update or add the NDK version
-            if grep -q "^android.ndk =" buildozer.spec; then
-              sed -i 's/^android.ndk =.*/android.ndk = 25.2.9519653/g' buildozer.spec
+            # Update NDK version
+            sed -i 's/^android.ndk =.*/android.ndk = 25b/g' buildozer.spec
+            
+            # Set NDK API to match minapi
+            sed -i 's/^android.ndk_api =.*/android.ndk_api = 21/g' buildozer.spec
+            
+            # Set p4a branch to develop
+            sed -i 's/^p4a.branch =.*/p4a.branch = develop/g' buildozer.spec
+            
+            # Add skip_update to avoid downloading SDK again
+            if ! grep -q "^android.skip_update =" buildozer.spec; then
+              echo "android.skip_update = True" >> buildozer.spec
             else
-              echo "android.ndk = 25.2.9519653" >> buildozer.spec
+              sed -i 's/^android.skip_update =.*/android.skip_update = True/g' buildozer.spec
             fi
             
-            # Fix duplicate requirements if they exist
-            if [ $(grep -c "^requirements =" buildozer.spec) -gt 1 ]; then
-              reqs=$(grep "^requirements =" buildozer.spec | head -1 | sed 's/^requirements = //g')
-              sed -i '/^requirements =/d' buildozer.spec
-              echo "requirements = $reqs" >> buildozer.spec
+            # Add SDK path
+            if ! grep -q "^android.sdk_path =" buildozer.spec; then
+              echo "android.sdk_path = /usr/local/lib/android/sdk" >> buildozer.spec
+            else
+              sed -i 's|^android.sdk_path =.*|android.sdk_path = /usr/local/lib/android/sdk|g' buildozer.spec
             fi
             
-            # Add p4a configuration
-            if ! grep -q "^p4a.branch =" buildozer.spec; then
-              echo "p4a.branch = develop" >> buildozer.spec
-            fi
-            
-            # Add ignore-setup-py flag
-            if ! grep -q "^p4a.extra_args =" buildozer.spec; then
-              echo "p4a.extra_args = --ignore-setup-py" >> buildozer.spec
+            # Add NDK path
+            if ! grep -q "^android.ndk_path =" buildozer.spec; then
+              echo "android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653" >> buildozer.spec
+            else
+              sed -i 's|^android.ndk_path =.*|android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653|g' buildozer.spec
             fi
             
             echo "Updated buildozer.spec:"
@@ -155,16 +177,18 @@ jobs:
                       print("Successfully patched and reconfigured libffi")
           EOF
 
+      - name: Install additional tools for libffi
+        run: |
+          sudo apt-get install -y autoconf automake libtool
+
       - name: Build with Buildozer
         run: |
-          mkdir -p ~/.android
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/repositories.cfg
-          
-          # Set environment variables for NDK
+          # Set environment variables
           export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
           export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
+          export ANDROIDSDK="/usr/local/lib/android/sdk"
           
-          # Run buildozer with verbose output
+          # Run buildozer with verbose output and debug level 2
           buildozer -v android debug
 
       - name: Upload APK
