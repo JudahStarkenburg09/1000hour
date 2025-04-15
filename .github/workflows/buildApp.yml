@@ -1,87 +1,158 @@
-name: Build Android APK
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # Allows manual triggering
+name: Build APK App - Patch Method
+on: workflow_dispatch
 
 jobs:
-  build:
+  build-android:
+    name: Build for Android
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python 3.10.8
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10.8'
-        
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          ccache \
-          git \
-          libncurses5:i386 \
-          libstdc++6:i386 \
-          libgcc1:i386 \
-          libgtk2.0-0:i386 \
-          libpangox-1.0-0:i386 \
-          libpangoxft-1.0-0:i386 \
-          libidn11:i386 \
-          python3-pip \
-          python3-setuptools \
-          python3-venv \
-          zip \
-          unzip \
-          openjdk-17-jdk \
-          autoconf \
-          libtool \
-          pkg-config \
-          zlib1g-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          libtinfo5 \
-          cmake
-        
-        python -m pip install --upgrade pip
-        pip install buildozer==1.5.0 Cython==0.29.36 virtualenv
-        
-    - name: Install Android SDK tools
-      run: |
-        mkdir -p $HOME/.buildozer/android/platform/
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip
-        unzip -q commandlinetools-linux-10406996_latest.zip -d $HOME/.buildozer/android/platform/
-        mv $HOME/.buildozer/android/platform/cmdline-tools $HOME/.buildozer/android/platform/android-sdk
-        mkdir -p $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest
-        mv $HOME/.buildozer/android/platform/android-sdk/bin $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/
-        mv $HOME/.buildozer/android/platform/android-sdk/lib $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/
-        
-        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-        
-        yes | sdkmanager --licenses
-        sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.2.9519653"
-        
-    - name: Build APK with Buildozer
-      run: |
-        # Ensure buildozer.spec exists
-        if [ ! -f "buildozer.spec" ]; then
-          echo "Error: buildozer.spec file not found in the repository root"
-          exit 1
-        fi
-        
-        # Build the APK
-        buildozer -v android debug
-        
-    - name: Upload APK artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-debug
-        path: bin/*.apk
-        if-no-files-found: error
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Buildozer dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev automake libtool-bin
+          python -m pip install --upgrade pip
+          pip install Cython==0.29.33
+          pip install buildozer
+
+      - name: Update buildozer.spec
+        run: |
+          if [ -f buildozer.spec ]; then
+            # Update or add the NDK version
+            if grep -q "^android.ndk =" buildozer.spec; then
+              sed -i 's/^android.ndk =.*/android.ndk = 25b/g' buildozer.spec
+            else
+              echo "android.ndk = 25b" >> buildozer.spec
+            fi
+            
+            # Fix duplicate requirements if they exist
+            if [ $(grep -c "^requirements =" buildozer.spec) -gt 1 ]; then
+              reqs=$(grep "^requirements =" buildozer.spec | sed 's/^requirements = //g' | tr '\n' ',')
+              reqs=${reqs%,}
+              sed -i '/^requirements =/d' buildozer.spec
+              echo "requirements = $reqs" >> buildozer.spec
+            fi
+            
+            # Add p4a configuration
+            if ! grep -q "^p4a.fork =" buildozer.spec; then
+              echo "p4a.fork = kivy" >> buildozer.spec
+            fi
+            if ! grep -q "^p4a.branch =" buildozer.spec; then
+              echo "p4a.branch = master" >> buildozer.spec
+            fi
+            if ! grep -q "^p4a.bootstrap =" buildozer.spec; then
+              echo "p4a.bootstrap = sdl2" >> buildozer.spec
+            fi
+            
+            echo "Updated buildozer.spec:"
+            cat buildozer.spec
+          else
+            echo "buildozer.spec not found!"
+            exit 1
+          fi
+
+      - name: Create libffi patch
+        run: |
+          mkdir -p patches
+          cat > patches/libffi_fix.patch << 'EOF'
+          --- a/configure.ac
+          +++ b/configure.ac
+          @@ -1,5 +1,15 @@
+           dnl Process this with autoconf to create configure
+           
+          +dnl Define LT_SYS_SYMBOL_USCORE macro if it's not already defined
+          +m4_ifndef([LT_SYS_SYMBOL_USCORE],
+          +[AC_DEFUN([LT_SYS_SYMBOL_USCORE],
+          +[AC_CACHE_CHECK([for _ prefix in compiled symbols],
+          +  [lt_cv_sys_symbol_underscore],
+          +  [lt_cv_sys_symbol_underscore=no
+          +  cat > conftest.$ac_ext <<_LT_EOF
+          +  void nm_test_func(){}
+          +  _LT_EOF
+          +  ])])])
+          +
+           AC_INIT([libffi], [3.3-rc0], [http://github.com/libffi/libffi/issues])
+           AC_CONFIG_HEADERS([fficonfig.h])
+           
+          @@ -214,6 +224,7 @@
+           
+           if test x$TARGET = xX86_64; then
+          +  LT_SYS_SYMBOL_USCORE
+             SYMBOL_PREFIX=
+           fi
+           
+          EOF
+
+      - name: Create libffi fix script
+        run: |
+          mkdir -p .buildozer/hooks
+          cat > .buildozer/hooks/before_recipe_build.py << 'EOF'
+          import os
+          import subprocess
+          
+          def before_recipe_build(recipe, arch):
+              # Only patch libffi
+              if recipe.name == 'libffi':
+                  print("Patching libffi configure.ac")
+                  patch_path = os.path.join(os.getcwd(), 'patches', 'libffi_fix.patch')
+                  recipe_dir = recipe.get_build_dir(arch.arch)
+                  
+                  if os.path.exists(patch_path) and os.path.exists(recipe_dir):
+                      # Apply the patch
+                      result = subprocess.run(
+                          f'cd {recipe_dir} && patch -p1 < {patch_path}',
+                          shell=True,
+                          capture_output=True,
+                          text=True
+                      )
+                      print("Patch output:", result.stdout)
+                      if result.stderr:
+                          print("Patch errors:", result.stderr)
+                      
+                      # Create m4_pattern_allow.m4 file to allow undefined macros
+                      m4_dir = os.path.join(recipe_dir, 'm4')
+                      os.makedirs(m4_dir, exist_ok=True)
+                      with open(os.path.join(m4_dir, 'pattern_allow.m4'), 'w') as f:
+                          f.write('m4_pattern_allow([LT_SYS_SYMBOL_USCORE])\n')
+                      
+                      # Run autoreconf with force-install to regenerate configure
+                      result = subprocess.run(
+                          f'cd {recipe_dir} && autoreconf -vfi',
+                          shell=True,
+                          capture_output=True,
+                          text=True
+                      )
+                      print("Autoreconf output:", result.stdout)
+                      if result.stderr:
+                          print("Autoreconf errors:", result.stderr)
+          EOF
+
+      - name: Build with Buildozer
+        run: |
+          mkdir -p ~/.android
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.android/repositories.cfg
+          
+          export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
+          export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
+          
+          buildozer -v android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-package
+          path: bin/*.apk
+          if-no-files-found: warn
