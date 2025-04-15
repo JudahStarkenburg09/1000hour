@@ -30,6 +30,11 @@ jobs:
           pip install Cython==0.29.33
           pip install buildozer==1.5.0
 
+      - name: Clean up previous NDK if exists
+        run: |
+          rm -rf ~/.buildozer/android/platform/android-ndk-r25b
+
+
       - name: Create NDK symlink
         run: |
           # Create directory structure
