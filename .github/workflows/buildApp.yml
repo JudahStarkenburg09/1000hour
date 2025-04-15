@@ -55,7 +55,8 @@ jobs:
             libx11-dev \
             libxext-dev \
             libsm-dev \
-            libxrender-dev
+            libxrender-dev \
+            curl
 
       - name: Free disk space
         run: |
@@ -63,33 +64,83 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/share/boost
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
 
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
           pip install cython==0.29.33 buildozer==1.5.0
 
-      - name: Create buildozer.spec if not exists
+      - name: Create detailed buildozer.spec
         run: |
-          if [ ! -f buildozer.spec ]; then
-            buildozer init
-            # Modify the spec file to use a specific NDK version
-            sed -i 's/^android.ndk =.*/android.ndk = 25b/g' buildozer.spec
-            sed -i 's/^android.ndk_path =.*/android.ndk_path = /home/runner/.buildozer/android/platform/android-ndk-r25b/g' buildozer.spec
-          fi
+          cat > buildozer.spec << 'EOF'
+          [app]
+          title = My Application
+          package.name = myapp
+          package.domain = org.test
+          source.dir = .
+          source.include_exts = py,png,jpg,kv,atlas
+          version = 0.1
+          requirements = python3,kivy
+          orientation = portrait
+          osx.python_version = 3
+          osx.kivy_version = 1.9.1
+          fullscreen = 0
+          android.permissions = INTERNET
+          android.api = 33
+          android.minapi = 21
+          android.sdk = 33
+          android.ndk = 25b
+          android.ndk_path = /home/runner/.buildozer/android/platform/android-ndk-r25b
+          android.skip_update = True
+          android.accept_sdk_license = True
+          android.arch = arm64-v8a
+          p4a.bootstrap = sdl2
+          EOF
 
-      - name: Download Android NDK manually
+      - name: Create directories
         run: |
           mkdir -p /home/runner/.buildozer/android/platform
-          cd /home/runner/.buildozer/android/platform
-          wget -q https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
-          unzip -q android-ndk-r25b-linux.zip
-          rm android-ndk-r25b-linux.zip
+          mkdir -p /home/runner/work/1000hour/1000hour/bin
 
-      - name: Build APK with increased timeout
+      - name: Download and extract Android NDK with curl
+        run: |
+          cd /home/runner/.buildozer/android/platform
+          echo "Starting NDK download..."
+          curl -L -o android-ndk.zip https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
+          echo "Download completed. Extracting..."
+          unzip -q android-ndk.zip
+          echo "Extraction completed. Verifying..."
+          ls -la
+          echo "Renaming directory if needed..."
+          if [ -d "android-ndk-r25b" ]; then
+            echo "NDK directory exists with correct name"
+          elif [ -d "android-ndk-r25.2.9519653" ]; then
+            mv android-ndk-r25.2.9519653 android-ndk-r25b
+            echo "Renamed NDK directory"
+          fi
+          ls -la
+          echo "NDK installation completed."
+
+      - name: Create minimal app if needed
+        run: |
+          if [ ! -f main.py ]; then
+            echo 'from kivy.app import App
+          from kivy.uix.button import Button
+
+          class TestApp(App):
+              def build(self):
+                  return Button(text="Hello World")
+
+          if __name__ == "__main__":
+              TestApp().run()' > main.py
+          fi
+
+      - name: Build APK with debug
         run: |
           export BUILDOZER_TIMEOUT=600
-          buildozer android debug
+          export P4A_DEBUG_OUTPUT=1
+          buildozer -v android debug
           
       - name: List built APKs
         run: |
