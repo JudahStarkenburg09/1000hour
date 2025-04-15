@@ -28,45 +28,49 @@ jobs:
           pip install Cython==0.29.33
           pip install buildozer
 
-      - name: Update buildozer.spec
+      - name: Create buildozer.spec if not exists
         run: |
-          if [ -f buildozer.spec ]; then
-            # Update or add the NDK version
-            if grep -q "^android.ndk =" buildozer.spec; then
-              sed -i 's/^android.ndk =.*/android.ndk = 25b/g' buildozer.spec
-            else
-              echo "android.ndk = 25b" >> buildozer.spec
-            fi
-            
-            # Fix duplicate requirements if they exist
-            if [ $(grep -c "^requirements =" buildozer.spec) -gt 1 ]; then
-              reqs=$(grep "^requirements =" buildozer.spec | sed 's/^requirements = //g' | tr '\n' ',')
-              reqs=${reqs%,}
-              sed -i '/^requirements =/d' buildozer.spec
-              echo "requirements = $reqs" >> buildozer.spec
-            fi
-            
-            # Add p4a configuration
-            if ! grep -q "^p4a.fork =" buildozer.spec; then
-              echo "p4a.fork = kivy" >> buildozer.spec
-            fi
-            if ! grep -q "^p4a.branch =" buildozer.spec; then
-              echo "p4a.branch = master" >> buildozer.spec
-            fi
-            if ! grep -q "^p4a.bootstrap =" buildozer.spec; then
-              echo "p4a.bootstrap = sdl2" >> buildozer.spec
-            fi
-            
-            echo "Updated buildozer.spec:"
-            cat buildozer.spec
-          else
-            echo "buildozer.spec not found!"
-            exit 1
+          if [ ! -f buildozer.spec ]; then
+            cat > buildozer.spec << 'EOF'
+[app]
+title = 1000 Hour Challenge
+package.name = thousandhour
+package.domain = org.thousandhour
+source.dir = .
+source.include_exts = py,png,jpg,kv,atlas,json
+requirements = python3==3.10.8,kivy==2.2.1,plyer,pyjnius,pillow
+orientation = portrait
+
+[buildozer]
+log_level = 2
+warn_on_root = 1
+
+# Custom source folders for SDL2 libraries
+requirements.source.sdl2_image = https://github.com/libsdl-org/SDL_image/releases/download/release-2.6.3/SDL2_image-2.6.3.tar.gz
+requirements.source.sdl2_mixer = https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.6.3/SDL2_mixer-2.6.3.tar.gz
+requirements.source.sdl2_ttf = https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.20.2/SDL2_ttf-2.20.2.tar.gz
+
+# Android specific
+android.api = 33
+android.minapi = 21
+android.ndk = 25b
+android.archs = arm64-v8a, armeabi-v7a
+android.allow_backup = True
+android.accept_sdk_license = True
+
+# Python for android
+p4a.bootstrap = sdl2
+p4a.branch = develop
+p4a.hook = .buildozer/hooks/before_recipe_build.py
+EOF
           fi
+
+      - name: Create libffi patch directory
+        run: |
+          mkdir -p patches
 
       - name: Create libffi patch
         run: |
-          mkdir -p patches
           cat > patches/libffi_fix.patch << 'EOF'
           --- a/configure.ac
           +++ b/configure.ac
@@ -96,49 +100,75 @@ jobs:
            
           EOF
 
-      - name: Create libffi fix script
+      - name: Create hooks directory
         run: |
           mkdir -p .buildozer/hooks
+
+      - name: Create hook script
+        run: |
           cat > .buildozer/hooks/before_recipe_build.py << 'EOF'
+          #!/usr/bin/env python3
           import os
           import subprocess
-          
+          import logging
+
           def before_recipe_build(recipe, arch):
+              # Set up logging
+              logging.basicConfig(level=logging.INFO)
+              logger = logging.getLogger('before_recipe_build')
+              
               # Only patch libffi
               if recipe.name == 'libffi':
-                  print("Patching libffi configure.ac")
+                  logger.info(f"Patching libffi for {arch.arch}")
                   patch_path = os.path.join(os.getcwd(), 'patches', 'libffi_fix.patch')
                   recipe_dir = recipe.get_build_dir(arch.arch)
                   
                   if os.path.exists(patch_path) and os.path.exists(recipe_dir):
                       # Apply the patch
+                      logger.info(f"Applying patch from {patch_path} to {recipe_dir}")
                       result = subprocess.run(
                           f'cd {recipe_dir} && patch -p1 < {patch_path}',
                           shell=True,
                           capture_output=True,
                           text=True
                       )
-                      print("Patch output:", result.stdout)
+                      logger.info(f"Patch output: {result.stdout}")
                       if result.stderr:
-                          print("Patch errors:", result.stderr)
+                          logger.warning(f"Patch errors: {result.stderr}")
                       
-                      # Create m4_pattern_allow.m4 file to allow undefined macros
+                      # Create m4 directory if it doesn't exist
                       m4_dir = os.path.join(recipe_dir, 'm4')
                       os.makedirs(m4_dir, exist_ok=True)
-                      with open(os.path.join(m4_dir, 'pattern_allow.m4'), 'w') as f:
-                          f.write('m4_pattern_allow([LT_SYS_SYMBOL_USCORE])\n')
                       
-                      # Run autoreconf with force-install to regenerate configure
+                      # Create pattern_allow.m4 file
+                      pattern_file = os.path.join(m4_dir, 'pattern_allow.m4')
+                      with open(pattern_file, 'w') as f:
+                          f.write('m4_pattern_allow([LT_SYS_SYMBOL_USCORE])\n')
+                      logger.info(f"Created {pattern_file}")
+                      
+                      # Run autoreconf
+                      logger.info("Running autoreconf -vfi")
                       result = subprocess.run(
                           f'cd {recipe_dir} && autoreconf -vfi',
                           shell=True,
                           capture_output=True,
                           text=True
                       )
-                      print("Autoreconf output:", result.stdout)
+                      logger.info(f"Autoreconf output: {result.stdout}")
                       if result.stderr:
-                          print("Autoreconf errors:", result.stderr)
+                          logger.warning(f"Autoreconf errors: {result.stderr}")
           EOF
+
+      - name: Make hook script executable
+        run: chmod +x .buildozer/hooks/before_recipe_build.py
+
+      - name: Update buildozer.spec to use hook
+        run: |
+          if ! grep -q "^p4a.hook =" buildozer.spec; then
+            echo "p4a.hook = .buildozer/hooks/before_recipe_build.py" >> buildozer.spec
+          else
+            sed -i 's|^p4a.hook =.*|p4a.hook = .buildozer/hooks/before_recipe_build.py|g' buildozer.spec
+          fi
 
       - name: Build with Buildozer
         run: |
@@ -148,6 +178,10 @@ jobs:
           export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/25.2.9519653"
           export ANDROIDNDK_HOME="/usr/local/lib/android/sdk/ndk/25.2.9519653"
           
+          # Clean any previous build
+          buildozer clean
+          
+          # Build with verbose output
           buildozer -v android debug
 
       - name: Upload APK
